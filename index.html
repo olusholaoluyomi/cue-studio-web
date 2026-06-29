@@ -467,6 +467,7 @@ a{color:var(--accent-2);text-decoration:none}
       </div>
       <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
         <span style="font-size:11px;color:var(--muted)" id="live-resolution"></span>
+        <span style="font-size:11px;color:var(--muted)" id="live-mic" title="Microphone"></span>
         <span style="font-size:11px;color:var(--muted)" id="live-chunks">0 chunks</span>
       </div>
     </div>
@@ -844,11 +845,13 @@ async function startSession() {
   }
   if (pendingMode === 'live') {
     navigate('live');
+    document.getElementById('live-placeholder').style.display = 'none';
+    startLiveComposite();
   } else {
     navigate('record');
+    document.getElementById('rec-placeholder').style.display = 'none';
+    startComposite();
   }
-  document.getElementById('rec-placeholder').style.display = 'none';
-  startComposite();
   updateMicIcon();
 }
 

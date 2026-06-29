@@ -1522,13 +1522,25 @@ async function startLiveStream() {
 
     liveMediaRecorder.ondataavailable = async (e) => {
       if (e.data.size === 0) return;
-      try {
-        await fetch(`/api/live/push/${liveSessionId}?key=${liveStreamKey}`, {
-          method: 'POST', body: e.data, headers: { 'Content-Type': 'application/octet-stream' }
-        });
-        liveChunksSent++;
-        document.getElementById('live-chunks').textContent = liveChunksSent + ' chunks';
-      } catch {}
+      const data = e.data;
+      const push = async (retries) => {
+        try {
+          const r = await fetch(`/api/live/push/${liveSessionId}?key=${liveStreamKey}`, {
+            method: 'POST', body: data, headers: { 'Content-Type': 'application/octet-stream' }
+          });
+          if (!r.ok) throw new Error('push failed');
+          liveChunksSent++;
+          document.getElementById('live-chunks').textContent = liveChunksSent + ' chunks';
+          document.getElementById('live-chunks').style.color = '';
+        } catch (err) {
+          if (retries > 0) {
+            await new Promise(r => setTimeout(r, 500));
+            return push(retries - 1);
+          }
+          document.getElementById('live-chunks').style.color = '#ff4444';
+        }
+      };
+      push(3);
     };
 
     liveMediaRecorder.onstop = () => {

@@ -251,8 +251,8 @@ app.post('/api/live/push/:id', express.raw({ type: '*/*', limit: '50mb' }), (req
   const index = stream.chunkIndex++;
   const data = req.body; // raw buffer
   stream.chunks.push({ index, data });
-  // Keep last 500 chunks in memory
-  if (stream.chunkIndex > 600) stream.chunks = stream.chunks.slice(-500);
+  // Keep last 150 chunks (~5 min at 2s intervals)
+  if (stream.chunks.length > 200) stream.chunks = stream.chunks.slice(-150);
   // Notify SSE clients
   stream.sseClients.forEach(c => {
     try { c.write(`data: ${JSON.stringify({ index, size: data.length })}\n\n`); } catch {}
@@ -265,11 +265,19 @@ app.get('/api/live/poll/:id', (req, res) => {
   const stream = liveStreams[req.params.id];
   if (!stream) return res.status(404).json({ error: 'stream_not_found' });
   const since = parseInt(req.query.since) || -1;
-  const chunks = stream.chunks.filter(c => c.index > since).map(c => ({
-    index: c.index, data: c.data.toString('base64'),
-  }));
+  const newChunks = stream.chunks.filter(c => c.index > since);
   const ended = !stream.active;
-  res.json({ chunks, ended, active: stream.active, chunkIndex: stream.chunkIndex });
+  res.json({ count: newChunks.length, indices: newChunks.map(c => c.index), ended, active: stream.active, chunkIndex: stream.chunkIndex });
+});
+
+app.get('/api/live/chunk/:id/:index', (req, res) => {
+  const stream = liveStreams[req.params.id];
+  if (!stream) return res.status(404).json({ error: 'stream_not_found' });
+  const index = parseInt(req.params.index);
+  const chunk = stream.chunks.find(c => c.index === index);
+  if (!chunk) return res.status(404).json({ error: 'chunk_not_found' });
+  res.set('Content-Type', 'application/octet-stream');
+  res.send(chunk.data);
 });
 
 // ── Live chat ──
@@ -379,7 +387,8 @@ const dot = document.getElementById('dot');
 const statusText = document.getElementById('status-text');
 const offlineMsg = document.getElementById('offline-msg');
 const chatMsgs = document.getElementById('chat-msgs');
-let allChunks = [];
+const MAX_WINDOW = 120; // ~4 min at 2s chunks
+let chunkBuf = [];
 let lastIndex = -1;
 let chatIndex = -1;
 let ended = false;
@@ -392,15 +401,22 @@ async function poll() {
     const data = await r.json();
     ended = data.ended;
     streamActive = data.active;
-    if (data.chunks && data.chunks.length) {
-      for (const c of data.chunks) {
-        const binary = atob(c.data);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        allChunks.push(bytes);
-        lastIndex = c.index;
+    if (data.indices && data.indices.length) {
+      for (const idx of data.indices) {
+        try {
+          const cr = await fetch('/api/live/chunk/' + sessionId + '/' + idx);
+          const buf = await cr.arrayBuffer();
+          chunkBuf.push(new Uint8Array(buf));
+          lastIndex = idx;
+        } catch {}
       }
-      const blob = new Blob(allChunks, { type: 'video/webm' });
+      // Sliding window: keep only the latest chunks
+      if (chunkBuf.length > MAX_WINDOW) chunkBuf = chunkBuf.slice(-MAX_WINDOW);
+      const total = chunkBuf.reduce((s, b) => s + b.length, 0);
+      const merged = new Uint8Array(total);
+      let offset = 0;
+      for (const b of chunkBuf) { merged.set(b, offset); offset += b.length; }
+      const blob = new Blob([merged], { type: 'video/webm' });
       const url = URL.createObjectURL(blob);
       const wasPlaying = !video.paused;
       video.src = url;
@@ -410,7 +426,7 @@ async function poll() {
       dot.className = 'dot live';
       statusText.textContent = 'LIVE';
     }
-    if (ended && !streamActive && !data.chunks?.length) {
+    if (ended && !streamActive && (!data.indices || !data.indices.length)) {
       dot.className = 'dot';
       statusText.textContent = 'Stream ended';
     }

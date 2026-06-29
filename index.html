@@ -1697,16 +1697,58 @@ function startLiveComposite() {
     ctx.fillRect(0, 0, w, h);
 
     const currentLayout = document.querySelector('#page-live .layout-badge.active')?.dataset?.layout || 'side';
-    const split = splitPosition || 0.5;
+    const s = splitPosition || 0.5;
     const mirror = document.getElementById('mirror-toggle')?.classList.contains('toggle-active');
+    const sw = selectedScreenInfo?.width || 1920;
+    const sh = selectedScreenInfo?.height || 1080;
+    const cw = selectedCameraInfo?.width || 640;
+    const ch = selectedCameraInfo?.height || 480;
 
-    if (screenVid && screenVid.readyState >= 2) {
-      if (currentLayout === 'camera') {
-        drawCamera(ctx, w, h, cameraVid, mirror);
-      } else if (currentLayout === 'custom') {
-        drawBubble(ctx, w, h, screenVid, cameraVid, mirror);
-      } else {
-        drawSplit(ctx, w, h, screenVid, cameraVid, currentLayout, split, mirror);
+    if (currentLayout === 'side') {
+      const splitW = Math.round(w * s);
+      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, splitW, h);
+      if (cameraStream && cameraVid.srcObject) drawContained(cameraVid, cw, ch, splitW, 0, w - splitW, h, mirror);
+    } else if (currentLayout === 'stacked') {
+      const splitH = Math.round(h * s);
+      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, splitH);
+      if (cameraStream && cameraVid.srcObject) drawContained(cameraVid, cw, ch, 0, splitH, w, h - splitH, mirror);
+    } else if (currentLayout === 'pip') {
+      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (cameraStream && cameraVid.srcObject) {
+        const pw = Math.round(w * 0.3), ph = Math.round(h * 0.25);
+        drawContained(cameraVid, cw, ch, w - pw - 20, h - ph - 20, pw, ph, mirror);
+      }
+    } else if (currentLayout === 'narrator') {
+      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (cameraStream && cameraVid.srcObject) {
+        const pw = Math.round(w * 0.25), ph = Math.round(h * 0.25);
+        drawContained(cameraVid, cw, ch, w - pw - 16, 16, pw, ph, mirror);
+      }
+    } else if (currentLayout === 'camera') {
+      if (cameraStream && cameraVid.srcObject) {
+        drawContained(cameraVid, cw, ch, 0, 0, w, h, mirror);
+      } else if (screenStream) {
+        drawContained(screenVid, sw, sh, 0, 0, w, h);
+      }
+    } else if (currentLayout === 'custom') {
+      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (cameraStream && cameraVid.srcObject) {
+        const cx = Math.round(w * bubbleX), cy = Math.round(h * bubbleY);
+        const r = Math.round(Math.min(w, h) * bubbleSize * 0.5);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        const scale = Math.max(r * 2 / cw, r * 2 / ch);
+        const dw2 = cw * scale, dh2 = ch * scale;
+        ctx.drawImage(cameraVid, cx - dw2 / 2, cy - dh2 / 2, dw2, dh2);
+        ctx.restore();
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
       }
     }
 

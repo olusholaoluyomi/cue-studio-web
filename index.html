@@ -103,7 +103,6 @@ a{color:var(--accent-2);text-decoration:none}
 .rec-btn:disabled{opacity:.4;pointer-events:none}
 .video-wrap{position:relative;background:#000;overflow:hidden;display:flex;align-items:center;justify-content:center}
 .video-wrap video{width:100%;height:100%;object-fit:contain;max-height:100%}
-.video-wrap canvas{position:absolute;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
 .placeholder-text{color:var(--fg-dim);font-size:1rem;text-align:center;padding:2rem}
 .fps-badge{position:absolute;bottom:12px;right:12px;background:rgba(0,0,0,.75);backdrop-filter:blur(8px);padding:4px 10px;font-family:var(--mono);font-size:11px;color:var(--accent-2)}
 .chat-sidebar .msg{padding:6px 10px;border-radius:6px;background:var(--surface-2);word-break:break-word}
@@ -1659,19 +1658,16 @@ function startLiveComposite() {
   canvas.width = w;
   canvas.height = h;
 
-  // Hide the canvas (capture surface), show the video element
-  canvas.style.position = 'absolute';
-  canvas.style.top = '0';
-  canvas.style.left = '0';
-  canvas.style.width = '1px';
-  canvas.style.height = '1px';
-  canvas.style.opacity = '0';
+  // Show the canvas directly (override any CSS hiding it)
+  canvas.style.position = 'relative';
+  canvas.style.top = '';
+  canvas.style.left = '';
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.opacity = '1';
   canvas.style.pointerEvents = 'none';
   canvas.style.display = 'block';
-  vid.style.display = '';
-  vid.style.width = '100%';
-  vid.style.height = '100%';
-  vid.style.objectFit = 'contain';
+  vid.style.display = 'none';
 
   document.getElementById('live-placeholder').style.display = 'none';
   document.getElementById('live-resolution').textContent = w + 'x' + h;
@@ -1682,7 +1678,6 @@ function startLiveComposite() {
     const at = audioStream.getAudioTracks()[0];
     if (at) liveCompositeStream.addTrack(at);
   }
-  vid.srcObject = liveCompositeStream;
 
   const ctx = canvas.getContext('2d');
   let frameCount = 0;

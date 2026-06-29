@@ -106,6 +106,9 @@ a{color:var(--accent-2);text-decoration:none}
 .video-wrap canvas{position:absolute;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}
 .placeholder-text{color:var(--fg-dim);font-size:1rem;text-align:center;padding:2rem}
 .fps-badge{position:absolute;bottom:12px;right:12px;background:rgba(0,0,0,.75);backdrop-filter:blur(8px);padding:4px 10px;font-family:var(--mono);font-size:11px;color:var(--accent-2)}
+.chat-sidebar .msg{padding:6px 10px;border-radius:6px;background:var(--surface-2);word-break:break-word}
+.chat-sidebar .msg .name{color:var(--accent-2);font-weight:600;font-size:11px}
+.chat-sidebar .msg .text{color:var(--fg);font-size:13px}
 .rec-bottom-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem}
 .layout-badges{display:flex;gap:.35rem;flex-wrap:wrap}
 .layout-badge{padding:4px 10px;font-size:11px;font-family:var(--mono);background:var(--ink-3);border:1px solid var(--line);cursor:pointer;transition:all .15s;text-transform:capitalize}
@@ -430,22 +433,29 @@ a{color:var(--accent-2);text-decoration:none}
       </div>
     </div>
 
-    <div class="video-wrap">
-      <div class="placeholder-text" id="live-placeholder">
-        <div style="font-size:3rem;margin-bottom:1rem">🔴</div>
-        Select your screen and camera to begin
+    <div style="display:flex;flex:1;overflow:hidden">
+      <div class="video-wrap" style="flex:1">
+        <div class="placeholder-text" id="live-placeholder">
+          <div style="font-size:3rem;margin-bottom:1rem">🔴</div>
+          Select your screen and camera to begin
+        </div>
+        <video id="live-composite-video" autoplay muted style="display:none;width:100%;height:100%;object-fit:contain"></video>
+        <canvas id="live-composite-canvas"></canvas>
+        <div class="fps-badge" id="live-fps-display">-- FPS</div>
+        <div id="live-screen-lost-msg" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;z-index:10;background:rgba(0,0,0,.8);padding:.75rem 1.25rem;border-radius:6px">
+          <div style="color:var(--fg-dim);font-size:.85rem">Screen sharing lost — click <strong>Sources</strong> to reselect</div>
+        </div>
       </div>
-      <video id="live-composite-video" autoplay muted style="display:none;width:100%;height:100%;object-fit:contain"></video>
-      <canvas id="live-composite-canvas"></canvas>
-      <div class="fps-badge" id="live-fps-display">-- FPS</div>
-      <div id="live-screen-lost-msg" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;z-index:10;background:rgba(0,0,0,.8);padding:.75rem 1.25rem;border-radius:6px">
-        <div style="color:var(--fg-dim);font-size:.85rem">Screen sharing lost — click <strong>Sources</strong> to reselect</div>
+      <div id="live-chat-panel" class="chat-sidebar" style="width:300px;border-left:1px solid var(--border);background:var(--surface);flex-shrink:0;display:none;flex-direction:column">
+        <div style="padding:10px 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--border);color:var(--muted)">💬 Chat</div>
+        <div id="live-chat-msgs" style="flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:4px;font-size:13px"></div>
       </div>
     </div>
 
     <div class="rec-bottom-bar">
       <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
         <button class="layout-badge" onclick="showSourcePicker()">🎯 Sources</button>
+        <button class="layout-badge" onclick="toggleLiveChat()">💬 Chat</button>
         <div class="layout-badges">
           <span class="layout-badge active" data-layout="side" onclick="setLiveLayout('side')">Side</span>
           <span class="layout-badge" data-layout="stacked" onclick="setLiveLayout('stacked')">Stacked</span>
@@ -1635,6 +1645,47 @@ function copyLiveUrl() {
     showToast('Viewer link copied!', 'success');
   });
 }
+
+let liveChatIndex = -1;
+let liveChatTimer = null;
+
+function toggleLiveChat() {
+  const panel = document.getElementById('live-chat-panel');
+  const isOpen = panel.style.display === 'flex';
+  panel.style.display = isOpen ? 'none' : 'flex';
+  if (!isOpen && liveSessionId) startLiveChatPolling();
+  if (isOpen) stopLiveChatPolling();
+}
+
+function startLiveChatPolling() {
+  stopLiveChatPolling();
+  liveChatTimer = setInterval(async () => {
+    if (!liveSessionId) return;
+    try {
+      const r = await fetch('/api/live/chat/' + liveSessionId + '?since=' + liveChatIndex);
+      const data = await r.json();
+      if (data.messages && data.messages.length) {
+        for (const m of data.messages) {
+          liveChatIndex = m.index;
+          const el = document.createElement('div');
+          el.className = 'msg';
+          el.innerHTML = '<div class="name">' + escHtml(m.name) + '</div><div class="text">' + escHtml(m.message) + '</div>';
+          document.getElementById('live-chat-msgs').appendChild(el);
+          el.scrollIntoView({ behavior: 'smooth' });
+        }
+      }
+    } catch {}
+  }, 1000);
+}
+
+function stopLiveChatPolling() {
+  if (liveChatTimer) { clearInterval(liveChatTimer); liveChatTimer = null; }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
 // ══════════════════════════════════════════════════════════════
 async function updateSettingsPage() {
   try {

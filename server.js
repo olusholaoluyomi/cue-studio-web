@@ -26,6 +26,7 @@ const DB_PATH = path.join(DB_DIR, 'studio.db');
 
 let db;
 const liveStreams = {}; // id -> { session, chunks: [{index, data}], sseClients: [res], startTime, active }
+const liveChat = {}; // id -> [{index, name, message, timestamp}]
 
 async function initDb() {
   const SQL = await initSqlJs();
@@ -271,6 +272,31 @@ app.get('/api/live/poll/:id', (req, res) => {
   res.json({ chunks, ended, active: stream.active, chunkIndex: stream.chunkIndex });
 });
 
+// ── Live chat ──
+app.post('/api/live/chat/:id', (req, res) => {
+  const stream = liveStreams[req.params.id];
+  if (!stream) return res.status(404).json({ error: 'stream_not_found' });
+  const { name, message } = req.body;
+  if (!message) return res.status(400).json({ error: 'missing_message' });
+  if (!liveChat[req.params.id]) liveChat[req.params.id] = [];
+  const chat = liveChat[req.params.id];
+  const msg = { index: chat.length, name: name || 'Anonymous', message, timestamp: Date.now() };
+  chat.push(msg);
+  if (chat.length > 200) chat.splice(0, chat.length - 200);
+  stream.sseClients.forEach(c => {
+    try { c.write(`data: ${JSON.stringify({ type: 'chat', chat: msg })}\n\n`); } catch {}
+  });
+  res.json(msg);
+});
+
+app.get('/api/live/chat/:id', (req, res) => {
+  const stream = liveStreams[req.params.id];
+  if (!stream) return res.status(404).json({ error: 'stream_not_found' });
+  const since = parseInt(req.query.since) || -1;
+  const chat = liveChat[req.params.id] || [];
+  res.json({ messages: chat.filter(m => m.index > since), ended: !stream.active, active: stream.active });
+});
+
 app.get('/api/live/stream/:id', (req, res) => {
   const stream = liveStreams[req.params.id];
   if (!stream) return res.status(404).json({ error: 'stream_not_found' });
@@ -304,10 +330,23 @@ app.get('/live/:roomName', (req, res) => {
   .dot.live{background:#ff4444;animation:pulse 1.5s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
   .room{font-family:monospace;color:#888}
-  .viewer-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:16px}
+  .layout{display:flex;flex:1;overflow:hidden}
+  .viewer-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:16px;position:relative}
   video{max-width:100%;max-height:100%;border-radius:4px;background:#000}
   .offline{text-align:center;color:#666}
   .offline h2{margin-bottom:8px}
+  .chat-panel{width:320px;display:flex;flex-direction:column;border-left:1px solid #2a2f3a;background:#141a24}
+  .chat-header{padding:10px 14px;font-size:13px;font-weight:600;border-bottom:1px solid #2a2f3a;color:#aaa}
+  .chat-msgs{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:4px}
+  .chat-msg{font-size:13px;padding:4px 8px;border-radius:4px;background:#1e2532;word-break:break-word}
+  .chat-msg .name{color:#00e0ff;font-weight:600;font-size:11px}
+  .chat-msg .text{color:#e0e0e0}
+  .chat-input-wrap{display:flex;border-top:1px solid #2a2f3a;padding:8px}
+  .chat-input-wrap input{flex:1;background:#1e2532;border:1px solid #2a2f3a;border-radius:4px;padding:8px;color:#e0e0e0;font-size:13px;outline:none}
+  .chat-input-wrap input:focus{border-color:#00e0ff}
+  .chat-input-wrap button{margin-left:6px;background:#00e0ff;border:none;border-radius:4px;padding:8px 12px;color:#0a0e14;font-weight:600;cursor:pointer;font-size:13px}
+  .talk-btn{position:absolute;bottom:24px;right:24px;background:#c6ff00;border:none;border-radius:50%;width:56px;height:56px;cursor:pointer;font-size:13px;font-weight:700;color:#0a0e14;box-shadow:0 2px 12px rgba(0,0,0,.5);z-index:10}
+  .talk-btn.active{background:#ff4444;animation:pulse 1s infinite}
 </style>
 </head>
 <body>
@@ -316,6 +355,7 @@ app.get('/live/:roomName', (req, res) => {
   <span id="status-text">Connecting...</span>
   <span class="room">${s.room_name}</span>
 </div>
+<div class="layout">
 <div class="viewer-wrap">
   <video id="viewer-video" autoplay muted controls style="display:none"></video>
   <div class="offline" id="offline-msg">
@@ -323,16 +363,28 @@ app.get('/live/:roomName', (req, res) => {
     <p>The streamer hasn't started sending yet.</p>
   </div>
 </div>
+<div class="chat-panel">
+  <div class="chat-header">💬 Chat</div>
+  <div class="chat-msgs" id="chat-msgs"></div>
+  <div class="chat-input-wrap">
+    <input id="chat-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendChat()" />
+    <button onclick="sendChat()">Send</button>
+  </div>
+</div>
+</div>
 <script>
 const sessionId = '${s.id}';
 const video = document.getElementById('viewer-video');
 const dot = document.getElementById('dot');
 const statusText = document.getElementById('status-text');
 const offlineMsg = document.getElementById('offline-msg');
+const chatMsgs = document.getElementById('chat-msgs');
 let allChunks = [];
 let lastIndex = -1;
+let chatIndex = -1;
 let ended = false;
 let streamActive = true;
+let viewerName = 'Viewer_' + Math.random().toString(36).slice(2,6);
 
 async function poll() {
   try {
@@ -366,6 +418,39 @@ async function poll() {
   if (!ended) setTimeout(poll, 1500);
 }
 poll();
+
+async function pollChat() {
+  try {
+    const r = await fetch('/api/live/chat/' + sessionId + '?since=' + chatIndex);
+    const data = await r.json();
+    if (data.messages && data.messages.length) {
+      for (const m of data.messages) {
+        chatIndex = m.index;
+        const el = document.createElement('div');
+        el.className = 'chat-msg';
+        el.innerHTML = '<div class="name">' + esc(m.name) + '</div><div class="text">' + esc(m.message) + '</div>';
+        chatMsgs.appendChild(el);
+        chatMsgs.scrollTop = chatMsgs.scrollHeight;
+      }
+    }
+  } catch {}
+  setTimeout(pollChat, 1000);
+}
+pollChat();
+
+async function sendChat() {
+  const inp = document.getElementById('chat-input');
+  const msg = inp.value.trim();
+  if (!msg) return;
+  inp.value = '';
+  try {
+    await fetch('/api/live/chat/' + sessionId, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: viewerName, message: msg })
+    });
+  } catch {}
+}
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 </script>
 </body>
 </html>`);

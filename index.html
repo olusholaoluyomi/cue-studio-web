@@ -429,7 +429,8 @@ a{color:var(--accent-2);text-decoration:none}
         <span class="rec-timer" id="live-timer">00:00</span>
       </div>
       <div class="rec-controls">
-        <button class="rec-btn record" id="live-go-btn" onclick="toggleLiveStream()" title="Go Live">🔴 Go Live</button>
+        <button class="btn-primary" id="live-go-btn" onclick="toggleLiveStream()" title="Go Live" style="padding:.5rem 1rem;font-size:.85rem;font-weight:600">🔴 Go Live</button>
+        <button class="btn-outline" id="live-rec-btn" onclick="toggleLiveRecord()" title="Record" style="padding:.5rem 1rem;font-size:.85rem;font-weight:600">⏺ Record</button>
       </div>
     </div>
 
@@ -1501,6 +1502,8 @@ let liveAnimationId = null;
 let liveChunksSent = 0;
 let liveSeconds = 0;
 let liveTimerInterval = null;
+let liveRecordRecorder = null;
+let liveRecordChunks = [];
 
 async function startLiveSession() {
   pendingMode = 'live';
@@ -1572,20 +1575,13 @@ async function startLiveStream() {
       push(3);
     };
 
-    liveMediaRecorder.onstop = () => {
-      document.getElementById('live-dot').style.background = 'var(--accent)';
-      document.getElementById('live-status-text').textContent = 'Stream ended';
-      document.getElementById('live-go-btn').textContent = '🔴 Go Live';
-      document.getElementById('live-go-btn').style.background = '';
-      stopLiveComposite();
-      clearInterval(liveTimerInterval);
-    };
-
     liveMediaRecorder.start(2000);
 
     document.getElementById('live-status-text').textContent = 'LIVE';
     document.getElementById('live-go-btn').textContent = '⏹ Stop';
     document.getElementById('live-go-btn').style.background = '#ff4444';
+    document.getElementById('live-go-btn').style.color = '#fff';
+    document.getElementById('live-go-btn').style.borderColor = '#ff4444';
 
     liveTimerInterval = setInterval(() => {
       liveSeconds++;
@@ -1603,18 +1599,56 @@ async function stopLiveStream() {
     liveMediaRecorder.stop();
   }
   try { await api('/live/stop', { method: 'POST', body: JSON.stringify({ id: liveSessionId }), headers: { 'Content-Type': 'application/json' } }); } catch {}
+  if (liveRecordRecorder && liveRecordRecorder.state !== 'inactive') { liveRecordRecorder.stop(); liveRecordRecorder = null; liveRecordChunks = []; }
   stopLiveComposite();
   clearInterval(liveTimerInterval);
   document.getElementById('live-dot').style.background = 'var(--accent)';
   document.getElementById('live-status-text').textContent = 'Stream ended';
   document.getElementById('live-go-btn').textContent = '🔴 Go Live';
   document.getElementById('live-go-btn').style.background = '';
+  document.getElementById('live-go-btn').style.color = '';
+  document.getElementById('live-go-btn').style.borderColor = '';
   document.getElementById('live-chunks').textContent = '0 chunks';
   document.getElementById('live-link-bar').style.display = 'none';
   document.getElementById('live-info').style.display = 'none';
   liveSessionId = null;
   liveStreamKey = null;
+  document.getElementById('live-rec-btn').textContent = '⏺ Record';
+  document.getElementById('live-rec-btn').style.background = '';
+  document.getElementById('live-rec-btn').style.color = '';
+  if (liveRecordRecorder) { liveRecordRecorder.stop(); liveRecordRecorder = null; liveRecordChunks = []; }
   showToast('Stream ended', 'success');
+}
+
+function toggleLiveRecord() {
+  const btn = document.getElementById('live-rec-btn');
+  if (liveRecordRecorder && liveRecordRecorder.state === 'recording') {
+    liveRecordRecorder.stop();
+    liveRecordRecorder = null;
+    btn.textContent = '⏺ Record';
+    btn.style.background = '';
+    btn.style.color = '';
+    return;
+  }
+  const stream = liveCompositeStream;
+  if (!stream) { showToast('Start streaming first', 'error'); return; }
+  liveRecordChunks = [];
+  const mimeType = getMimeType();
+  liveRecordRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: getVideoBitsPerSecond() });
+  liveRecordRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) liveRecordChunks.push(e.data);
+  };
+  liveRecordRecorder.onstop = () => {
+    if (liveRecordChunks.length === 0) return;
+    const blob = new Blob(liveRecordChunks, { type: mimeType });
+    const id = 'local_' + Date.now();
+    localRecordings.unshift({ id, fileName: 'live-recording-' + Date.now() + '.webm', blob, durationSeconds: liveSeconds, size: blob.size, createdAt: new Date().toISOString() });
+    showToast('Recording saved to Library', 'success');
+  };
+  liveRecordRecorder.start(1000);
+  btn.textContent = '⏹ Stop';
+  btn.style.background = '#ff4444';
+  btn.style.color = '#fff';
 }
 
 function startLiveComposite() {
@@ -1624,13 +1658,31 @@ function startLiveComposite() {
   const vid = document.getElementById('live-composite-video');
   canvas.width = w;
   canvas.height = h;
-  canvas.style.display = '';
-  vid.style.display = 'none';
+
+  // Hide the canvas (capture surface), show the video element
+  canvas.style.position = 'absolute';
+  canvas.style.top = '0';
+  canvas.style.left = '0';
+  canvas.style.width = '1px';
+  canvas.style.height = '1px';
+  canvas.style.opacity = '0';
+  canvas.style.pointerEvents = 'none';
+  canvas.style.display = 'block';
+  vid.style.display = '';
+  vid.style.width = '100%';
+  vid.style.height = '100%';
+  vid.style.objectFit = 'contain';
+
   document.getElementById('live-placeholder').style.display = 'none';
   document.getElementById('live-resolution').textContent = w + 'x' + h;
 
   if (liveCompositeStream) { liveCompositeStream.getTracks().forEach(t => t.stop()); }
   liveCompositeStream = canvas.captureStream(30);
+  if (audioStream) {
+    const at = audioStream.getAudioTracks()[0];
+    if (at) liveCompositeStream.addTrack(at);
+  }
+  vid.srcObject = liveCompositeStream;
 
   const ctx = canvas.getContext('2d');
   let frameCount = 0;

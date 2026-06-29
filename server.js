@@ -371,10 +371,13 @@ app.get('/live/:roomName', (req, res) => {
     <p>The streamer hasn't started sending yet.</p>
   </div>
 </div>
-<div class="chat-panel">
-  <div class="chat-header">💬 Chat</div>
+<div class="chat-panel" id="chat-panel">
+  <div class="chat-header">
+    <span>💬 Chat</span>
+    <button onclick="toggleChat()" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:14px;padding:2px 6px">🗕</button>
+  </div>
   <div class="chat-msgs" id="chat-msgs"></div>
-  <div class="chat-input-wrap">
+  <div class="chat-input-wrap" id="chat-input-wrap">
     <input id="chat-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendChat()" />
     <button onclick="sendChat()">Send</button>
   </div>
@@ -465,6 +468,10 @@ async function sendChat() {
       body: JSON.stringify({ name: viewerName, message: msg })
     });
   } catch {}
+}
+function toggleChat() {
+  const p = document.getElementById('chat-panel');
+  p.style.display = p.style.display === 'none' ? 'flex' : 'none';
 }
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 </script>

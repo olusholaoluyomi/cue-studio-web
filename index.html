@@ -433,6 +433,12 @@ a{color:var(--accent-2);text-decoration:none}
       </div>
     </div>
 
+    <div id="live-link-bar" style="display:none;padding:6px 12px;background:var(--surface-2);border-bottom:1px solid var(--border);text-align:center;font-size:13px">
+      <span style="color:var(--muted)">👁 Viewer link: </span>
+      <span style="font-family:var(--mono);color:var(--accent-2)" id="live-viewer-url">-</span>
+      <button class="layout-badge" onclick="copyLiveUrl()" style="margin-left:8px">📋 Copy</button>
+    </div>
+
     <div style="display:flex;flex:1;overflow:hidden">
       <div class="video-wrap" style="flex:1">
         <div class="placeholder-text" id="live-placeholder">
@@ -446,7 +452,7 @@ a{color:var(--accent-2);text-decoration:none}
           <div style="color:var(--fg-dim);font-size:.85rem">Screen sharing lost — click <strong>Sources</strong> to reselect</div>
         </div>
       </div>
-      <div id="live-chat-panel" class="chat-sidebar" style="width:300px;border-left:1px solid var(--border);background:var(--surface);flex-shrink:0;display:none;flex-direction:column">
+      <div id="live-chat-panel" class="chat-sidebar" style="width:300px;border-left:1px solid var(--border);background:var(--surface);flex-shrink:0;display:flex;flex-direction:column">
         <div style="padding:10px 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--border);color:var(--muted)">💬 Chat</div>
         <div id="live-chat-msgs" style="flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:4px;font-size:13px"></div>
       </div>
@@ -454,8 +460,7 @@ a{color:var(--accent-2);text-decoration:none}
 
     <div class="rec-bottom-bar">
       <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
-        <button class="layout-badge" onclick="showSourcePicker()">🎯 Sources</button>
-        <button class="layout-badge" onclick="toggleLiveChat()">💬 Chat</button>
+        <button class="layout-badge" onclick="liveSourcePicker()">🎯 Sources</button>
         <div class="layout-badges">
           <span class="layout-badge active" data-layout="side" onclick="setLiveLayout('side')">Side</span>
           <span class="layout-badge" data-layout="stacked" onclick="setLiveLayout('stacked')">Stacked</span>
@@ -475,8 +480,8 @@ a{color:var(--accent-2);text-decoration:none}
     <div id="live-info" style="display:none;padding:6px 12px;text-align:center">
       <div style="display:flex;gap:1rem;align-items:center;justify-content:center;flex-wrap:wrap;font-size:13px">
         <span style="color:var(--muted)">🔗</span>
-        <span style="font-family:var(--mono);font-size:12px;color:var(--accent)" id="live-viewer-url"></span>
-        <button class="layout-badge" onclick="copyLiveUrl()" id="live-copy-btn">📋 Copy Link</button>
+        <span style="font-family:var(--mono);font-size:12px;color:var(--accent)" id="live-viewer-url-alt"></span>
+        <button class="layout-badge" onclick="copyLiveUrl()">📋 Copy</button>
       </div>
     </div>
   </div>
@@ -659,7 +664,7 @@ function showPage(name) {
   if (link) link.classList.add('active');
   if (name === 'library') renderLibrary();
   if (name === 'settings') updateSettingsPage();
-  if (name === 'record') { /* keep state */ }
+  if (name === 'live') { startLiveChatPolling(); }
 }
 
 function navigate(name) {
@@ -698,9 +703,25 @@ async function loadDevices() {
     const cams = devices.filter(d => d.kind === 'videoinput');
     const mics = devices.filter(d => d.kind === 'audioinput');
     const camSel = document.getElementById('camera-select');
+    const prevCam = camSel.value;
     camSel.innerHTML = '<option value="">No Camera</option>' + cams.map((c, i) => `<option value="${c.deviceId}">${c.label || 'Camera ' + (i + 1)}</option>`).join('');
     const micSel = document.getElementById('mic-select');
+    const prevMic = micSel.value;
     micSel.innerHTML = '<option value="">No Microphone</option>' + mics.map((m, i) => `<option value="${m.deviceId}">${m.label || 'Microphone ' + (i + 1)}</option>`).join('');
+
+    // Restore previous dropdown selections; fallback to currently active stream device IDs
+    if (prevCam && cams.find(c => c.deviceId === prevCam)) {
+      camSel.value = prevCam;
+    } else if (cameraStream) {
+      const t = cameraStream.getVideoTracks()[0];
+      if (t) camSel.value = t.getSettings().deviceId || '';
+    }
+    if (prevMic && mics.find(m => m.deviceId === prevMic)) {
+      micSel.value = prevMic;
+    } else if (audioStream) {
+      const t = audioStream.getAudioTracks()[0];
+      if (t) micSel.value = t.getSettings().deviceId || '';
+    }
   } catch {}
 }
 
@@ -711,6 +732,11 @@ async function showSourcePicker() {
   document.getElementById('source-picker').style.display = 'flex';
   await loadDevices();
   updateScreenUI();
+}
+
+function liveSourcePicker() {
+  pendingMode = 'live';
+  showSourcePicker();
 }
 
 function closeSourcePicker() {
@@ -880,6 +906,7 @@ function getVideoBitsPerSecond() {
 }
 
 function startComposite(onFrame) {
+  if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
   const { w, h } = getCanvasSize();
   const canvas = document.getElementById('composite-canvas');
   const canvasVid = document.getElementById('composite-video');
@@ -1499,6 +1526,8 @@ async function startLiveStream() {
     liveRoomName = res.roomName;
 
     document.getElementById('live-viewer-url').textContent = window.location.origin + res.viewerUrl;
+    document.getElementById('live-viewer-url-alt').textContent = window.location.origin + res.viewerUrl;
+    document.getElementById('live-link-bar').style.display = '';
     document.getElementById('live-info').style.display = '';
     document.getElementById('live-dot').style.background = '#ff4444';
 
@@ -1581,12 +1610,15 @@ async function stopLiveStream() {
   document.getElementById('live-go-btn').textContent = '🔴 Go Live';
   document.getElementById('live-go-btn').style.background = '';
   document.getElementById('live-chunks').textContent = '0 chunks';
+  document.getElementById('live-link-bar').style.display = 'none';
+  document.getElementById('live-info').style.display = 'none';
   liveSessionId = null;
   liveStreamKey = null;
   showToast('Stream ended', 'success');
 }
 
 function startLiveComposite() {
+  if (liveAnimationId) { cancelAnimationFrame(liveAnimationId); liveAnimationId = null; }
   const { w, h } = getCanvasSize();
   const canvas = document.getElementById('live-composite-canvas');
   const vid = document.getElementById('live-composite-video');
@@ -1666,10 +1698,8 @@ let liveChatTimer = null;
 
 function toggleLiveChat() {
   const panel = document.getElementById('live-chat-panel');
-  const isOpen = panel.style.display === 'flex';
-  panel.style.display = isOpen ? 'none' : 'flex';
-  if (!isOpen && liveSessionId) startLiveChatPolling();
-  if (isOpen) stopLiveChatPolling();
+  panel.style.display = 'flex';
+  if (liveSessionId) startLiveChatPolling();
 }
 
 function startLiveChatPolling() {

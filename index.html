@@ -1657,6 +1657,7 @@ function toggleLiveRecord() {
 
 function startLiveComposite() {
   if (liveAnimationId) { cancelAnimationFrame(liveAnimationId); liveAnimationId = null; }
+  selectedLayout = 'side';
   const { w, h } = getCanvasSize();
   const canvas = document.getElementById('live-composite-canvas');
   const vid = document.getElementById('live-composite-video');
@@ -1690,6 +1691,39 @@ function startLiveComposite() {
   const ctx = canvas.getContext('2d');
   let frameCount = 0;
   let lastFpsTime = performance.now();
+
+  // Bubble drag support on the Live canvas
+  let liveDragTarget = false;
+  function liveGetPos(e) {
+    const wrapRect = canvas.parentElement.getBoundingClientRect();
+    const t = e.touches;
+    const clientX = t && t.length ? t[0].clientX : e.clientX;
+    const clientY = t && t.length ? t[0].clientY : e.clientY;
+    return { x: (clientX - wrapRect.left) / wrapRect.width, y: (clientY - wrapRect.top) / wrapRect.height };
+  }
+  function liveOnDown(e) {
+    if (selectedLayout !== 'custom') return;
+    const pos = liveGetPos(e);
+    const cx = bubbleX, cy = bubbleY;
+    const r = bubbleSize * 0.5;
+    const dx = pos.x - cx, dy = pos.y - cy;
+    if (dx * dx + dy * dy <= r * r) { liveDragTarget = true; e.preventDefault(); }
+  }
+  function liveOnMove(e) {
+    if (!liveDragTarget) return;
+    e.preventDefault();
+    const pos = liveGetPos(e);
+    bubbleX = Math.max(0, Math.min(1, pos.x));
+    bubbleY = Math.max(0, Math.min(1, pos.y));
+  }
+  function liveOnUp() { liveDragTarget = false; }
+  canvas.addEventListener('mousedown', liveOnDown);
+  canvas.addEventListener('mousemove', liveOnMove);
+  canvas.addEventListener('mouseup', liveOnUp);
+  canvas.addEventListener('mouseleave', liveOnUp);
+  canvas.addEventListener('touchstart', liveOnDown, { passive: false });
+  canvas.addEventListener('touchmove', liveOnMove, { passive: false });
+  canvas.addEventListener('touchend', liveOnUp);
 
   function draw() {
     if (!liveAnimationId) return;
@@ -1797,7 +1831,10 @@ function stopLiveComposite() {
 }
 
 function setLiveLayout(layout) {
+  selectedLayout = layout;
   document.querySelectorAll('#page-live .layout-badge').forEach(b => b.classList.toggle('active', b.dataset.layout === layout));
+  const grp = document.getElementById('bubble-size-group');
+  if (grp) grp.style.display = layout === 'custom' ? '' : 'none';
 }
 
 function copyLiveUrl() {

@@ -209,13 +209,13 @@ app.get('/api/health', (req, res) => res.json({ ok: true, uptime: process.uptime
 
 // ── Live session routes ──
 app.post('/api/live/start', auth, (req, res) => {
-  const { lesson_id } = req.body;
+  const { lesson_id, mimeType } = req.body;
   const id = uuidv4();
   const roomName = 'live-' + id.slice(0, 8);
   const streamKey = uuidv4();
   run(`INSERT INTO live_sessions (id, user_id, lesson_id, room_name, stream_key, status, started_at) VALUES (?, ?, ?, ?, ?, 'live', datetime('now'))`,
     [id, req.user.id, lesson_id || 'general', roomName, streamKey]);
-  liveStreams[id] = { session: null, chunks: [], sseClients: [], streamClients: [], startTime: Date.now(), active: true, chunkIndex: 0 };
+  liveStreams[id] = { session: null, chunks: [], sseClients: [], streamClients: [], startTime: Date.now(), active: true, chunkIndex: 0, mimeType: mimeType || 'video/webm;codecs=vp8,opus' };
   res.json({ id, roomName, streamKey, viewerUrl: `/live/${roomName}`, createdAt: new Date().toISOString() });
 });
 
@@ -330,6 +330,13 @@ app.get('/api/live/stream/:id', (req, res) => {
   });
 });
 
+app.get('/api/live/info/:id', (req, res) => {
+  const stream = liveStreams[req.params.id];
+  if (!stream) return res.status(404).json({ error: 'stream_not_found' });
+  res.set('Cache-Control', 'no-store');
+  res.json({ mimeType: stream.mimeType, active: stream.active, chunkIndex: stream.chunkIndex, startTime: stream.startTime });
+});
+
 // Persistent streaming endpoint: sends all chunks progressively via chunked transfer encoding
 app.get('/api/live/stream-webm/:id', (req, res) => {
   const stream = liveStreams[req.params.id];
@@ -422,50 +429,103 @@ const dot = document.getElementById('dot');
 const statusText = document.getElementById('status-text');
 const offlineMsg = document.getElementById('offline-msg');
 const chatMsgs = document.getElementById('chat-msgs');
-let chatIndex = -1;
+let mediaSource = null;
+let sourceBuffer = null;
+let lastAppendedIndex = -1;
 let ended = false;
+let chatIndex = -1;
 let viewerName = 'Viewer_' + Math.random().toString(36).slice(2,6);
 
-// Persistent streaming: the browser fetches progressively and plays as data arrives
-function startStream() {
-  video.src = '/api/live/stream-webm/' + sessionId;
+function initMSE() {
+  if (!window.MediaSource) { statusText.textContent = 'MSE not supported'; return; }
+  mediaSource = new MediaSource();
+  video.src = URL.createObjectURL(mediaSource);
   video.style.display = '';
   offlineMsg.style.display = 'none';
-  dot.className = 'dot live';
-  statusText.textContent = 'LIVE';
-  video.onerror = function() {
-    // Connection likely closed because stream ended or vanished
-    statusText.textContent = 'Stream ended';
-    dot.className = 'dot';
-    video.style.display = 'none';
-    offlineMsg.style.display = '';
-  };
-  video.onended = function() {
-    statusText.textContent = 'Stream ended';
-    dot.className = 'dot';
-  };
+  mediaSource.addEventListener('sourceopen', onSourceOpen);
 }
-// Try to start streaming immediately; the endpoint will wait for first chunks
-startStream();
 
-// Lightweight poll just to detect stream ended
-async function pollStatus() {
+async function onSourceOpen() {
+  let mimeType = 'video/webm;codecs=vp8,opus';
   try {
-    const r = await fetch('/api/live/poll/' + sessionId + '?since=-1');
-    const data = await r.json();
-    ended = data.ended;
-    if (data.active && video.paused && video.readyState < 2) {
-      // Stream is active but video hasn't loaded - try reconnecting
-      startStream();
-    }
-    if (data.ended && !data.active) {
-      dot.className = 'dot';
-      statusText.textContent = 'Stream ended';
-    }
+    const info = await fetch('/api/live/info/' + sessionId).then(r => r.json());
+    mimeType = info.mimeType || mimeType;
   } catch {}
-  if (!ended) setTimeout(pollStatus, 2000);
+  const mimeTypes = [mimeType, 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm'];
+  for (const mt of mimeTypes) {
+    try { sourceBuffer = mediaSource.addSourceBuffer(mt); break; } catch {}
+  }
+  if (!sourceBuffer) { statusText.textContent = 'Codec not supported'; return; }
+  await catchUp();
+  startPolling();
 }
-setTimeout(pollStatus, 2000);
+
+async function catchUp() {
+  let pollData;
+  try { pollData = await fetch('/api/live/poll/' + sessionId + '?since=-1').then(r => r.json()); } catch { return; }
+  const indices = (pollData.indices || []).sort((a,b) => a-b);
+  for (const idx of indices) {
+    try {
+      const r = await fetch('/api/live/chunk/' + sessionId + '/' + idx);
+      if (!r.ok) continue;
+      const buf = await r.arrayBuffer();
+      await appendToSourceBuffer(buf);
+      lastAppendedIndex = idx;
+    } catch {}
+  }
+  if (indices.length > 0) {
+    dot.className = 'dot live';
+    statusText.textContent = 'LIVE';
+  }
+}
+
+function startPolling() {
+  setInterval(async () => {
+    if (ended) return;
+    try {
+      const r = await fetch('/api/live/poll/' + sessionId + '?since=' + lastAppendedIndex);
+      const data = await r.json();
+      ended = data.ended;
+      if (data.indices && data.indices.length) {
+        dot.className = 'dot live';
+        statusText.textContent = 'LIVE';
+        for (const idx of data.indices.sort((a,b) => a-b)) {
+          if (idx <= lastAppendedIndex) continue;
+          try {
+            const cr = await fetch('/api/live/chunk/' + sessionId + '/' + idx);
+            if (!cr.ok) continue;
+            const buf = await cr.arrayBuffer();
+            await appendToSourceBuffer(buf);
+            lastAppendedIndex = idx;
+          } catch {}
+        }
+      }
+      if (data.ended && !data.active) {
+        if (mediaSource && mediaSource.readyState === 'open') mediaSource.endOfStream();
+        dot.className = 'dot';
+        statusText.textContent = 'Stream ended';
+      }
+    } catch {}
+  }, 1500);
+}
+
+function appendToSourceBuffer(data) {
+  return new Promise(function(resolve) {
+    function doAppend() {
+      try {
+        sourceBuffer.appendBuffer(data);
+        sourceBuffer.addEventListener('updateend', resolve, { once: true });
+      } catch { resolve(); }
+    }
+    if (sourceBuffer.updating) {
+      sourceBuffer.addEventListener('updateend', doAppend, { once: true });
+    } else {
+      doAppend();
+    }
+  });
+}
+
+initMSE();
 
 async function pollChat() {
   try {

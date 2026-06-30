@@ -1521,7 +1521,8 @@ function toggleLiveStream() {
 async function startLiveStream() {
   if (!screenStream) { showToast('Select a screen source first', 'error'); return; }
   try {
-    const res = await api('/live/start', { method: 'POST', body: JSON.stringify({ lesson_id: 'general' }), headers: { 'Content-Type': 'application/json' } });
+    const mimeType = getMimeType();
+    const res = await api('/live/start', { method: 'POST', body: JSON.stringify({ lesson_id: 'general', mimeType }), headers: { 'Content-Type': 'application/json' } });
     liveSessionId = res.id;
     liveStreamKey = res.streamKey;
     liveRoomName = res.roomName;
@@ -1532,7 +1533,6 @@ async function startLiveStream() {
 
     startLiveComposite();
 
-    const mimeType = getMimeType();
     const bitsPerSecond = getVideoBitsPerSecond();
     const stream = liveCompositeStream;
     if (audioStream) {

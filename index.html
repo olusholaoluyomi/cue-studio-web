@@ -1691,6 +1691,11 @@ function startLiveComposite() {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#0a0e14';
     ctx.fillRect(0, 0, w, h);
+    // DEBUG: always-visible indicator that the draw loop is running
+    ctx.fillStyle = '#ff0000';
+    ctx.font = Math.round(h * 0.03) + 'px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('DEBUG: draw() running | frame ' + frameCount, 10, 30);
 
     const currentLayout = document.querySelector('#page-live .layout-badge.active')?.dataset?.layout || 'side';
     const s = splitPosition || 0.5;

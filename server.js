@@ -267,6 +267,7 @@ app.get('/api/live/poll/:id', (req, res) => {
   const since = parseInt(req.query.since) || -1;
   const newChunks = stream.chunks.filter(c => c.index > since);
   const ended = !stream.active;
+  res.set('Cache-Control', 'no-store');
   res.json({ count: newChunks.length, indices: newChunks.map(c => c.index), ended, active: stream.active, chunkIndex: stream.chunkIndex });
 });
 
@@ -277,6 +278,7 @@ app.get('/api/live/chunk/:id/:index', (req, res) => {
   const chunk = stream.chunks.find(c => c.index === index);
   if (!chunk) return res.status(404).json({ error: 'chunk_not_found' });
   res.set('Content-Type', 'application/octet-stream');
+  res.set('Cache-Control', 'no-store');
   res.send(chunk.data);
 });
 
@@ -302,6 +304,7 @@ app.get('/api/live/chat/:id', (req, res) => {
   if (!stream) return res.status(404).json({ error: 'stream_not_found' });
   const since = parseInt(req.query.since) || -1;
   const chat = liveChat[req.params.id] || [];
+  res.set('Cache-Control', 'no-store');
   res.json({ messages: chat.filter(m => m.index > since), ended: !stream.active, active: stream.active });
 });
 

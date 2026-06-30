@@ -432,12 +432,6 @@ a{color:var(--accent-2);text-decoration:none}
       </div>
     </div>
 
-    <div id="live-link-bar" style="display:none;padding:6px 12px;background:var(--surface-2);border-bottom:1px solid var(--border);text-align:center;font-size:13px">
-      <span style="color:var(--muted)">👁 Viewer link: </span>
-      <span style="font-family:var(--mono);color:var(--accent-2)" id="live-viewer-url">-</span>
-      <button class="layout-badge" onclick="copyLiveUrl()" style="margin-left:8px">📋 Copy</button>
-    </div>
-
     <div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
       <div class="video-wrap" style="flex:1;min-height:0">
         <div class="placeholder-text" id="live-placeholder">
@@ -1532,9 +1526,7 @@ async function startLiveStream() {
     liveStreamKey = res.streamKey;
     liveRoomName = res.roomName;
 
-    document.getElementById('live-viewer-url').textContent = window.location.origin + res.viewerUrl;
     document.getElementById('live-viewer-url-alt').textContent = window.location.origin + res.viewerUrl;
-    document.getElementById('live-link-bar').style.display = '';
     document.getElementById('live-info').style.display = '';
     document.getElementById('live-dot').style.background = '#ff4444';
 
@@ -1613,7 +1605,6 @@ async function stopLiveStream() {
   document.getElementById('live-go-btn').style.color = '';
   document.getElementById('live-go-btn').style.borderColor = '';
   document.getElementById('live-chunks').textContent = '0 chunks';
-  document.getElementById('live-link-bar').style.display = 'none';
   document.getElementById('live-info').style.display = 'none';
   liveSessionId = null;
   liveStreamKey = null;
@@ -1657,7 +1648,7 @@ function toggleLiveRecord() {
 
 function startLiveComposite() {
   if (liveAnimationId) { cancelAnimationFrame(liveAnimationId); liveAnimationId = null; }
-  selectedLayout = 'side';
+  selectedLayout = document.querySelector('#page-live .layout-badge.active')?.dataset?.layout || 'side';
   const { w, h } = getCanvasSize();
   const canvas = document.getElementById('live-composite-canvas');
   const vid = document.getElementById('live-composite-video');
@@ -1695,11 +1686,11 @@ function startLiveComposite() {
   // Bubble drag support on the Live canvas
   let liveDragTarget = false;
   function liveGetPos(e) {
-    const wrapRect = canvas.parentElement.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const t = e.touches;
     const clientX = t && t.length ? t[0].clientX : e.clientX;
     const clientY = t && t.length ? t[0].clientY : e.clientY;
-    return { x: (clientX - wrapRect.left) / wrapRect.width, y: (clientY - wrapRect.top) / wrapRect.height };
+    return { x: (clientX - rect.left) / rect.width, y: (clientY - rect.top) / rect.height };
   }
   function liveOnDown(e) {
     if (selectedLayout !== 'custom') return;
@@ -1838,7 +1829,7 @@ function setLiveLayout(layout) {
 }
 
 function copyLiveUrl() {
-  const url = document.getElementById('live-viewer-url').textContent;
+  const url = document.getElementById('live-viewer-url-alt').textContent;
   navigator.clipboard.writeText(url).then(() => {
     showToast('Viewer link copied!', 'success');
   }).catch(() => {

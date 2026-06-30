@@ -905,6 +905,23 @@ function getVideoBitsPerSecond() {
   return q === 'high' ? 50000000 : q === 'low' ? 10000000 : 25000000;
 }
 
+function drawContained(ctx, vid, srcW, srcH, tx, ty, tw, th, mirrorX) {
+  if (!vid || !vid.videoWidth) return false;
+  const sw = vid.videoWidth || srcW, sh = vid.videoHeight || srcH;
+  const scale = Math.min(tw / sw, th / sh);
+  const dw = scale * sw, dh = scale * sh;
+  if (mirrorX) {
+    ctx.save();
+    ctx.translate(tx + tw / 2, ty + th / 2);
+    ctx.scale(-1, 1);
+    ctx.drawImage(vid, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(vid, tx + (tw - dw) / 2, ty + (th - dh) / 2, dw, dh);
+  }
+  return true;
+}
+
 function startComposite(onFrame) {
   if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
   const { w, h } = getCanvasSize();
@@ -934,22 +951,6 @@ function startComposite(onFrame) {
     canvasVid.srcObject = compositeStream;
   } catch (e) { console.error('captureStream error:', e); }
 
-  function drawContained(vid, srcW, srcH, tx, ty, tw, th, mirrorX) {
-    if (!vid || !vid.videoWidth) return;
-    const sw = vid.videoWidth || srcW, sh = vid.videoHeight || srcH;
-    const scale = Math.min(tw / sw, th / sh);
-    const dw = scale * sw, dh = scale * sh;
-    if (mirrorX) {
-      ctx.save();
-      ctx.translate(tx + tw / 2, ty + th / 2);
-      ctx.scale(-1, 1);
-      ctx.drawImage(vid, -dw / 2, -dh / 2, dw, dh);
-      ctx.restore();
-    } else {
-      ctx.drawImage(vid, tx + (tw - dw) / 2, ty + (th - dh) / 2, dw, dh);
-    }
-  }
-
   const ctx = canvas.getContext('2d');
   let screenVid = document.getElementById('screen-preview');
   let cameraVid = document.getElementById('camera-preview');
@@ -973,32 +974,32 @@ function startComposite(onFrame) {
 
     if (selectedLayout === 'side') {
       const splitW = Math.round(w * splitPosition);
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, splitW, h);
-      if (cameraStream && cameraVid.srcObject) drawContained(cameraVid, cw, ch, splitW, 0, w - splitW, h, mirrorCamera);
+      if (screenStream) drawContained(ctx, screenVid, sw, sh, 0, 0, splitW, h);
+      if (cameraStream && cameraVid.srcObject) drawContained(ctx, cameraVid, cw, ch, splitW, 0, w - splitW, h, mirrorCamera);
     } else if (selectedLayout === 'stacked') {
       const splitH = Math.round(h * splitPosition);
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, splitH);
-      if (cameraStream && cameraVid.srcObject) drawContained(cameraVid, cw, ch, 0, splitH, w, h - splitH, mirrorCamera);
+      if (screenStream) drawContained(ctx, screenVid, sw, sh, 0, 0, w, splitH);
+      if (cameraStream && cameraVid.srcObject) drawContained(ctx, cameraVid, cw, ch, 0, splitH, w, h - splitH, mirrorCamera);
     } else if (selectedLayout === 'pip') {
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (screenStream) drawContained(ctx, screenVid, sw, sh, 0, 0, w, h);
       if (cameraStream && cameraVid.srcObject) {
         const pw = Math.round(w * 0.3), ph = Math.round(h * 0.25);
-        drawContained(cameraVid, cw, ch, w - pw - 20, h - ph - 20, pw, ph, mirrorCamera);
+        drawContained(ctx, cameraVid, cw, ch, w - pw - 20, h - ph - 20, pw, ph, mirrorCamera);
       }
     } else if (selectedLayout === 'narrator') {
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (screenStream) drawContained(ctx, screenVid, sw, sh, 0, 0, w, h);
       if (cameraStream && cameraVid.srcObject) {
         const pw = Math.round(w * 0.25), ph = Math.round(h * 0.25);
-        drawContained(cameraVid, cw, ch, w - pw - 16, 16, pw, ph, mirrorCamera);
+        drawContained(ctx, cameraVid, cw, ch, w - pw - 16, 16, pw, ph, mirrorCamera);
       }
     } else if (selectedLayout === 'camera') {
       if (cameraStream && cameraVid.srcObject) {
-        drawContained(cameraVid, cw, ch, 0, 0, w, h, mirrorCamera);
+        drawContained(ctx, cameraVid, cw, ch, 0, 0, w, h, mirrorCamera);
       } else if (screenStream) {
-        drawContained(screenVid, sw, sh, 0, 0, w, h);
+        drawContained(ctx, screenVid, sw, sh, 0, 0, w, h);
       }
     } else if (selectedLayout === 'custom') {
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (screenStream) drawContained(ctx, screenVid, sw, sh, 0, 0, w, h);
       if (cameraStream && cameraVid.srcObject) {
         const cx = Math.round(w * bubbleX), cy = Math.round(h * bubbleY);
         const r = Math.round(Math.min(w, h) * bubbleSize * 0.5);
@@ -1699,34 +1700,34 @@ function startLiveComposite() {
     const cw = selectedCameraInfo?.width || 640;
     const ch = selectedCameraInfo?.height || 480;
 
+    // Diagnostic: draw a spinning test pattern if no video sources render
+    let drewAnything = false;
+
     if (currentLayout === 'side') {
       const splitW = Math.round(w * s);
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, splitW, h);
-      if (cameraStream && cameraVid.srcObject) drawContained(cameraVid, cw, ch, splitW, 0, w - splitW, h, mirror);
+      if (screenStream && drawContained(ctx, screenVid, sw, sh, 0, 0, splitW, h)) drewAnything = true;
+      if (cameraStream && cameraVid.srcObject && drawContained(ctx, cameraVid, cw, ch, splitW, 0, w - splitW, h, mirror)) drewAnything = true;
     } else if (currentLayout === 'stacked') {
       const splitH = Math.round(h * s);
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, splitH);
-      if (cameraStream && cameraVid.srcObject) drawContained(cameraVid, cw, ch, 0, splitH, w, h - splitH, mirror);
+      if (screenStream && drawContained(ctx, screenVid, sw, sh, 0, 0, w, splitH)) drewAnything = true;
+      if (cameraStream && cameraVid.srcObject && drawContained(ctx, cameraVid, cw, ch, 0, splitH, w, h - splitH, mirror)) drewAnything = true;
     } else if (currentLayout === 'pip') {
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (screenStream && drawContained(ctx, screenVid, sw, sh, 0, 0, w, h)) drewAnything = true;
       if (cameraStream && cameraVid.srcObject) {
         const pw = Math.round(w * 0.3), ph = Math.round(h * 0.25);
-        drawContained(cameraVid, cw, ch, w - pw - 20, h - ph - 20, pw, ph, mirror);
+        if (drawContained(ctx, cameraVid, cw, ch, w - pw - 20, h - ph - 20, pw, ph, mirror)) drewAnything = true;
       }
     } else if (currentLayout === 'narrator') {
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (screenStream && drawContained(ctx, screenVid, sw, sh, 0, 0, w, h)) drewAnything = true;
       if (cameraStream && cameraVid.srcObject) {
         const pw = Math.round(w * 0.25), ph = Math.round(h * 0.25);
-        drawContained(cameraVid, cw, ch, w - pw - 16, 16, pw, ph, mirror);
+        if (drawContained(ctx, cameraVid, cw, ch, w - pw - 16, 16, pw, ph, mirror)) drewAnything = true;
       }
     } else if (currentLayout === 'camera') {
-      if (cameraStream && cameraVid.srcObject) {
-        drawContained(cameraVid, cw, ch, 0, 0, w, h, mirror);
-      } else if (screenStream) {
-        drawContained(screenVid, sw, sh, 0, 0, w, h);
-      }
+      if (cameraStream && cameraVid.srcObject && drawContained(ctx, cameraVid, cw, ch, 0, 0, w, h, mirror)) drewAnything = true;
+      else if (screenStream && drawContained(ctx, screenVid, sw, sh, 0, 0, w, h)) drewAnything = true;
     } else if (currentLayout === 'custom') {
-      if (screenStream) drawContained(screenVid, sw, sh, 0, 0, w, h);
+      if (screenStream && drawContained(ctx, screenVid, sw, sh, 0, 0, w, h)) drewAnything = true;
       if (cameraStream && cameraVid.srcObject) {
         const cx = Math.round(w * bubbleX), cy = Math.round(h * bubbleY);
         const r = Math.round(Math.min(w, h) * bubbleSize * 0.5);
@@ -1744,7 +1745,28 @@ function startLiveComposite() {
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.stroke();
+        drewAnything = true;
       }
+    }
+
+    // If nothing drew, show a pulsing diagnostic pattern
+    if (!drewAnything) {
+      const t = Date.now() / 1000;
+      ctx.fillStyle = '#1a2244';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#c6ff00';
+      ctx.font = Math.round(h * 0.08) + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('🔄 Awaiting video sources...', w / 2, h / 2);
+      ctx.fillStyle = '#ff6600';
+      const bx = Math.round(w * 0.1), by = Math.round(h * 0.1);
+      const bw = Math.round(w * 0.8), bh = Math.round(h * 0.8);
+      ctx.strokeStyle = '#ff6600';
+      ctx.lineWidth = 4;
+      const phase = Math.sin(t * 3) * 0.5 + 0.5;
+      ctx.globalAlpha = 0.3 + phase * 0.7;
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.globalAlpha = 1;
     }
 
     frameCount++;

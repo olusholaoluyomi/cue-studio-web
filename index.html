@@ -288,43 +288,44 @@ a{color:var(--accent-2);text-decoration:none}
       </div>
     </div>
 
-    <!-- Quick Settings -->
-    <div class="qs-panel" id="qs-panel">
-      <h3>Quick Settings</h3>
-      <div class="qs-group">
-        <label>Quality</label>
-        <select id="quality-select" onchange="onQualityChange()">
-          <option value="high">High (50 Mbps)</option>
-          <option value="medium" selected>Medium (25 Mbps)</option>
-          <option value="low">Low (10 Mbps)</option>
-        </select>
-      </div>
-      <div class="qs-group">
-        <label>Layout Split</label>
-        <input type="range" id="split-slider" min="10" max="90" value="50" oninput="onSplitChange(this.value)" />
-        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Screen</span><span id="split-label">50%</span><span>Camera</span></div>
-      </div>
-      <div class="qs-row">
-        <label style="font-size:.75rem;color:var(--muted);font-family:var(--mono)">System Audio</label>
-        <div class="toggle" id="sys-audio-toggle" onclick="toggleSysAudio(this)"></div>
-      </div>
-      <div class="qs-row">
-        <label style="font-size:.75rem;color:var(--muted);font-family:var(--mono)">Mirror Camera</label>
-        <div class="toggle" id="mirror-toggle" onclick="toggleMirror()"></div>
-      </div>
-      <div class="qs-row">
-        <label style="font-size:.75rem;color:var(--muted);font-family:var(--mono)">Orientation</label>
-        <select style="width:auto;padding:4px 8px;font-size:12px" onchange="setOrientation(this.value)">
-          <option value="landscape">Landscape</option>
-          <option value="portrait">Portrait</option>
-        </select>
-      </div>
-      <div class="qs-group" id="bubble-size-group" style="display:none">
-        <label>Bubble Size</label>
-        <input type="range" id="bubble-size-slider" min="5" max="50" value="18" oninput="onBubbleSizeChange(this.value)" />
-        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Small</span><span id="bubble-size-label">18%</span><span>Large</span></div>
-      </div>
-    </div>
+  </div>
+</div>
+
+<!-- ═══ QUICK SETTINGS ═══ -->
+<div class="qs-panel" id="qs-panel">
+  <h3>Quick Settings</h3>
+  <div class="qs-group">
+    <label>Quality</label>
+    <select id="quality-select" onchange="onQualityChange()">
+      <option value="high">High (50 Mbps)</option>
+      <option value="medium" selected>Medium (25 Mbps)</option>
+      <option value="low">Low (10 Mbps)</option>
+    </select>
+  </div>
+  <div class="qs-group">
+    <label>Layout Split</label>
+    <input type="range" id="split-slider" min="10" max="90" value="50" oninput="onSplitChange(this.value)" />
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Screen</span><span id="split-label">50%</span><span>Camera</span></div>
+  </div>
+  <div class="qs-row">
+    <label style="font-size:.75rem;color:var(--muted);font-family:var(--mono)">System Audio</label>
+    <div class="toggle" id="sys-audio-toggle" onclick="toggleSysAudio(this)"></div>
+  </div>
+  <div class="qs-row">
+    <label style="font-size:.75rem;color:var(--muted);font-family:var(--mono)">Mirror Camera</label>
+    <div class="toggle" id="mirror-toggle" onclick="toggleMirror()"></div>
+  </div>
+  <div class="qs-row">
+    <label style="font-size:.75rem;color:var(--muted);font-family:var(--mono)">Orientation</label>
+    <select style="width:auto;padding:4px 8px;font-size:12px" onchange="setOrientation(this.value)">
+      <option value="landscape">Landscape</option>
+      <option value="portrait">Portrait</option>
+    </select>
+  </div>
+  <div class="qs-group" id="bubble-size-group" style="display:none">
+    <label>Bubble Size</label>
+    <input type="range" id="bubble-size-slider" min="5" max="50" value="18" oninput="onBubbleSizeChange(this.value)" />
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Small</span><span id="bubble-size-label">18%</span><span>Large</span></div>
   </div>
 </div>
 
@@ -462,6 +463,7 @@ a{color:var(--accent-2);text-decoration:none}
     <div class="rec-bottom-bar">
       <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
         <button class="layout-badge" onclick="liveSourcePicker()">🎯 Sources</button>
+        <button class="layout-badge" onclick="toggleQuickSettings()">⚙️ Settings</button>
         <div class="layout-badges">
           <span class="layout-badge active" data-layout="side" onclick="setLiveLayout('side')">Side</span>
           <span class="layout-badge" data-layout="stacked" onclick="setLiveLayout('stacked')">Stacked</span>

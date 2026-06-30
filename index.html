@@ -253,8 +253,6 @@ a{color:var(--accent-2);text-decoration:none}
       </div>
       <video id="composite-video" autoplay muted style="display:none;width:100%;height:100%;object-fit:contain"></video>
       <canvas id="composite-canvas"></canvas>
-      <video id="screen-preview" autoplay muted playsinline style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none;opacity:0"></video>
-      <video id="camera-preview" autoplay muted playsinline style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none;opacity:0"></video>
       <div class="fps-badge" id="fps-display">-- FPS</div>
       <div id="screen-lost-msg" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;z-index:10">
         <div style="font-size:2rem;margin-bottom:.5rem">🖥</div>
@@ -439,8 +437,8 @@ a{color:var(--accent-2);text-decoration:none}
       <button class="layout-badge" onclick="copyLiveUrl()" style="margin-left:8px">📋 Copy</button>
     </div>
 
-    <div style="display:flex;flex:1;overflow:hidden">
-      <div class="video-wrap" style="flex:1">
+    <div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+      <div class="video-wrap" style="flex:1;min-height:0">
         <div class="placeholder-text" id="live-placeholder">
           <div style="font-size:3rem;margin-bottom:1rem">🔴</div>
           Select your screen and camera to begin
@@ -452,9 +450,12 @@ a{color:var(--accent-2);text-decoration:none}
           <div style="color:var(--fg-dim);font-size:.85rem">Screen sharing lost — click <strong>Sources</strong> to reselect</div>
         </div>
       </div>
-      <div id="live-chat-panel" class="chat-sidebar" style="width:300px;border-left:1px solid var(--border);background:var(--surface);flex-shrink:0;display:flex;flex-direction:column">
-        <div style="padding:10px 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--border);color:var(--muted)">💬 Chat</div>
-        <div id="live-chat-msgs" style="flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:4px;font-size:13px"></div>
+      <div id="live-chat-panel" style="border-top:1px solid var(--border);background:var(--surface);flex-shrink:0;display:flex;flex-direction:column;max-height:160px">
+        <div style="padding:6px 14px;font-size:12px;font-weight:600;border-bottom:1px solid var(--border);color:var(--muted);cursor:pointer;display:flex;justify-content:space-between" onclick="toggleLiveChat()">
+          <span>💬 Chat</span>
+          <span id="live-chat-toggle-icon">▾</span>
+        </div>
+        <div id="live-chat-msgs" style="flex:1;overflow-y:auto;padding:6px 8px;display:flex;flex-direction:column;gap:3px;font-size:12px"></div>
       </div>
     </div>
 
@@ -906,8 +907,9 @@ function getVideoBitsPerSecond() {
 }
 
 function drawContained(ctx, vid, srcW, srcH, tx, ty, tw, th, mirrorX) {
-  if (!vid || !vid.videoWidth) return false;
-  const sw = vid.videoWidth || srcW, sh = vid.videoHeight || srcH;
+  if (!vid) return false;
+  const sw = srcW || vid.videoWidth, sh = srcH || vid.videoHeight;
+  if (!sw || !sh) return false;
   const scale = Math.min(tw / sw, th / sh);
   const dw = scale * sw, dh = scale * sh;
   if (mirrorX) {
@@ -1663,8 +1665,11 @@ function startLiveComposite() {
   canvas.style.position = 'relative';
   canvas.style.top = '';
   canvas.style.left = '';
-  canvas.style.width = '100%';
-  canvas.style.height = '100%';
+  canvas.style.maxWidth = '100%';
+  canvas.style.maxHeight = '100%';
+  canvas.style.width = 'auto';
+  canvas.style.height = 'auto';
+  canvas.style.aspectRatio = w / h;
   canvas.style.opacity = '1';
   canvas.style.pointerEvents = 'none';
   canvas.style.display = 'block';
@@ -1691,11 +1696,6 @@ function startLiveComposite() {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#0a0e14';
     ctx.fillRect(0, 0, w, h);
-    // DEBUG: always-visible indicator that the draw loop is running
-    ctx.fillStyle = '#ff0000';
-    ctx.font = Math.round(h * 0.03) + 'px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText('DEBUG: draw() running | frame ' + frameCount, 10, 30);
 
     const currentLayout = document.querySelector('#page-live .layout-badge.active')?.dataset?.layout || 'side';
     const s = splitPosition || 0.5;
@@ -1813,9 +1813,12 @@ let liveChatIndex = -1;
 let liveChatTimer = null;
 
 function toggleLiveChat() {
-  const panel = document.getElementById('live-chat-panel');
-  panel.style.display = 'flex';
-  if (liveSessionId) startLiveChatPolling();
+  const msgs = document.getElementById('live-chat-msgs');
+  const icon = document.getElementById('live-chat-toggle-icon');
+  const collapsed = msgs.style.display === 'none';
+  msgs.style.display = collapsed ? '' : 'none';
+  icon.textContent = collapsed ? '▾' : '▸';
+  if (collapsed && liveSessionId) startLiveChatPolling();
 }
 
 function startLiveChatPolling() {
@@ -1894,5 +1897,9 @@ function toggleTheme() {
 initAuth();
 updateThemeIcon();
 </script>
+<div id="preview-videos" style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;pointer-events:none;opacity:0">
+  <video id="screen-preview" autoplay muted playsinline></video>
+  <video id="camera-preview" autoplay muted playsinline></video>
+</div>
 </body>
 </html>

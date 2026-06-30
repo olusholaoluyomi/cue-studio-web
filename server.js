@@ -215,7 +215,7 @@ app.post('/api/live/start', auth, (req, res) => {
   const streamKey = uuidv4();
   run(`INSERT INTO live_sessions (id, user_id, lesson_id, room_name, stream_key, status, started_at) VALUES (?, ?, ?, ?, ?, 'live', datetime('now'))`,
     [id, req.user.id, lesson_id || 'general', roomName, streamKey]);
-  liveStreams[id] = { session: null, chunks: [], sseClients: [], startTime: Date.now(), active: true, chunkIndex: 0 };
+  liveStreams[id] = { session: null, chunks: [], sseClients: [], streamClients: [], startTime: Date.now(), active: true, chunkIndex: 0 };
   res.json({ id, roomName, streamKey, viewerUrl: `/live/${roomName}`, createdAt: new Date().toISOString() });
 });
 
@@ -229,6 +229,7 @@ app.post('/api/live/stop', auth, (req, res) => {
   if (stream) {
     stream.active = false;
     stream.sseClients.forEach(c => { try { c.end(); } catch {} });
+    stream.streamClients.forEach(c => { try { c.end(); } catch {} });
     delete liveStreams[id];
   }
   res.json({ success: true });
@@ -258,6 +259,11 @@ app.post('/api/live/push/:id', express.raw({ type: '*/*', limit: '50mb' }), (req
     try { c.write(`data: ${JSON.stringify({ index, size: data.length })}\n\n`); } catch {}
   });
   stream.sseClients = stream.sseClients.filter(c => { try { return !c.destroyed; } catch { return false; } });
+  // Write to persistent stream-webm clients
+  stream.streamClients.forEach(c => {
+    try { c.write(data); } catch {}
+  });
+  stream.streamClients = stream.streamClients.filter(c => { try { return !c.destroyed; } catch { return false; } });
   res.json({ index });
 });
 
@@ -321,6 +327,29 @@ app.get('/api/live/stream/:id', (req, res) => {
   stream.sseClients.push(res);
   req.on('close', () => {
     stream.sseClients = stream.sseClients.filter(c => c !== res);
+  });
+});
+
+// Persistent streaming endpoint: sends all chunks progressively via chunked transfer encoding
+app.get('/api/live/stream-webm/:id', (req, res) => {
+  const stream = liveStreams[req.params.id];
+  if (!stream) return res.status(404).json({ error: 'stream_not_found' });
+  res.writeHead(200, {
+    'Content-Type': 'video/webm',
+    'Transfer-Encoding': 'chunked',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    'Pragma': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  // Send all existing chunks immediately so viewer can start playing
+  for (const chunk of stream.chunks) {
+    res.write(chunk.data);
+  }
+  // Register for future chunks
+  stream.streamClients.push(res);
+  req.on('close', () => {
+    stream.streamClients = stream.streamClients.filter(c => c !== res);
   });
 });
 
@@ -393,53 +422,50 @@ const dot = document.getElementById('dot');
 const statusText = document.getElementById('status-text');
 const offlineMsg = document.getElementById('offline-msg');
 const chatMsgs = document.getElementById('chat-msgs');
-const MAX_WINDOW = 120; // ~4 min at 2s chunks
-let chunkBuf = [];
-let lastIndex = -1;
 let chatIndex = -1;
 let ended = false;
-let streamActive = true;
 let viewerName = 'Viewer_' + Math.random().toString(36).slice(2,6);
 
-async function poll() {
+// Persistent streaming: the browser fetches progressively and plays as data arrives
+function startStream() {
+  video.src = '/api/live/stream-webm/' + sessionId;
+  video.style.display = '';
+  offlineMsg.style.display = 'none';
+  dot.className = 'dot live';
+  statusText.textContent = 'LIVE';
+  video.onerror = function() {
+    // Connection likely closed because stream ended or vanished
+    statusText.textContent = 'Stream ended';
+    dot.className = 'dot';
+    video.style.display = 'none';
+    offlineMsg.style.display = '';
+  };
+  video.onended = function() {
+    statusText.textContent = 'Stream ended';
+    dot.className = 'dot';
+  };
+}
+// Try to start streaming immediately; the endpoint will wait for first chunks
+startStream();
+
+// Lightweight poll just to detect stream ended
+async function pollStatus() {
   try {
-    const r = await fetch('/api/live/poll/' + sessionId + '?since=' + lastIndex);
+    const r = await fetch('/api/live/poll/' + sessionId + '?since=-1');
     const data = await r.json();
     ended = data.ended;
-    streamActive = data.active;
-    if (data.indices && data.indices.length) {
-      for (const idx of data.indices) {
-        try {
-          const cr = await fetch('/api/live/chunk/' + sessionId + '/' + idx);
-          const buf = await cr.arrayBuffer();
-          chunkBuf.push(new Uint8Array(buf));
-          lastIndex = idx;
-        } catch {}
-      }
-      // Sliding window: keep only the latest chunks
-      if (chunkBuf.length > MAX_WINDOW) chunkBuf = chunkBuf.slice(-MAX_WINDOW);
-      const total = chunkBuf.reduce((s, b) => s + b.length, 0);
-      const merged = new Uint8Array(total);
-      let offset = 0;
-      for (const b of chunkBuf) { merged.set(b, offset); offset += b.length; }
-      const blob = new Blob([merged], { type: 'video/webm' });
-      const url = URL.createObjectURL(blob);
-      const wasPlaying = !video.paused;
-      video.src = url;
-      video.style.display = '';
-      offlineMsg.style.display = 'none';
-      if (wasPlaying) video.play().catch(() => {});
-      dot.className = 'dot live';
-      statusText.textContent = 'LIVE';
+    if (data.active && video.paused && video.readyState < 2) {
+      // Stream is active but video hasn't loaded - try reconnecting
+      startStream();
     }
-    if (ended && !streamActive && (!data.indices || !data.indices.length)) {
+    if (data.ended && !data.active) {
       dot.className = 'dot';
       statusText.textContent = 'Stream ended';
     }
   } catch {}
-  if (!ended) setTimeout(poll, 1500);
+  if (!ended) setTimeout(pollStatus, 2000);
 }
-poll();
+setTimeout(pollStatus, 2000);
 
 async function pollChat() {
   try {

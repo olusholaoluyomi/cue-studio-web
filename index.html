@@ -1665,7 +1665,7 @@ function startLiveComposite() {
   canvas.style.height = 'auto';
   canvas.style.aspectRatio = w / h;
   canvas.style.opacity = '1';
-  canvas.style.pointerEvents = 'none';
+  canvas.style.pointerEvents = 'auto';
   canvas.style.display = 'block';
   vid.style.display = 'none';
 
@@ -1695,10 +1695,11 @@ function startLiveComposite() {
   function liveOnDown(e) {
     if (selectedLayout !== 'custom') return;
     const pos = liveGetPos(e);
-    const cx = bubbleX, cy = bubbleY;
-    const r = bubbleSize * 0.5;
-    const dx = pos.x - cx, dy = pos.y - cy;
-    if (dx * dx + dy * dy <= r * r) { liveDragTarget = true; e.preventDefault(); }
+    const { w, h } = getCanvasSize();
+    const px = pos.x * w, py = pos.y * h;
+    const cx = w * bubbleX, cy = h * bubbleY;
+    const r = Math.min(w, h) * bubbleSize * 0.5;
+    if ((px - cx) ** 2 + (py - cy) ** 2 <= r ** 2) { liveDragTarget = true; e.preventDefault(); }
   }
   function liveOnMove(e) {
     if (!liveDragTarget) return;

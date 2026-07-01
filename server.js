@@ -8,8 +8,14 @@ const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const initSqlJs = require('sql.js');
-const { spawn } = require('child_process');
-const ffmpegPath = require('ffmpeg-static');
+const { spawn, execSync } = require('child_process');
+const ffmpegStaticPath = require('ffmpeg-static');
+// Prefer ffmpeg-static binary; fall back to system ffmpeg if it's null or broken
+let ffmpegPath = ffmpegStaticPath;
+if (!ffmpegPath) {
+  try { ffmpegPath = execSync('which ffmpeg', { encoding: 'utf8' }).trim() || null; } catch {}
+}
+if (ffmpegPath) console.log(`[ffmpeg] binary: ${ffmpegPath}`);
 
 const app = express();
 const PORT = process.env.PORT || 3456;

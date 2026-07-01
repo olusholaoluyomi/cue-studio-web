@@ -427,6 +427,7 @@ a{color:var(--accent-2);text-decoration:none}
         <span class="rec-timer" id="live-timer">00:00</span>
       </div>
       <div class="rec-controls">
+        <input id="live-yt-key" type="password" placeholder="YouTube stream key" style="padding:.5rem .6rem;font-size:.8rem;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--fg);width:220px" title="From YouTube Studio → Go Live → Stream key" />
         <button class="btn-primary" id="live-go-btn" onclick="toggleLiveStream()" title="Go Live" style="padding:.5rem 1rem;font-size:.85rem;font-weight:600">🔴 Go Live</button>
         <button class="btn-outline" id="live-rec-btn" onclick="toggleLiveRecord()" title="Record" style="padding:.5rem 1rem;font-size:.85rem;font-weight:600">⏺ Record</button>
       </div>
@@ -1520,14 +1521,19 @@ function toggleLiveStream() {
 
 async function startLiveStream() {
   if (!screenStream) { showToast('Select a screen source first', 'error'); return; }
+  const ytKeyInput = document.getElementById('live-yt-key');
+  const typedKey = ytKeyInput.value.trim();
+  if (typedKey) localStorage.setItem('yt_stream_key', typedKey);
+  // If left blank, server falls back to YT_STREAM_KEY set on Railway.
+  const youtubeStreamKey = typedKey || undefined;
   try {
     const mimeType = getMimeType();
-    const res = await api('/live/start', { method: 'POST', body: JSON.stringify({ lesson_id: 'general', mimeType }), headers: { 'Content-Type': 'application/json' } });
+    const res = await api('/live/start', { method: 'POST', body: JSON.stringify({ lesson_id: 'general', mimeType, youtubeStreamKey }), headers: { 'Content-Type': 'application/json' } });
     liveSessionId = res.id;
     liveStreamKey = res.streamKey;
     liveRoomName = res.roomName;
 
-    document.getElementById('live-viewer-url-alt').textContent = window.location.origin + res.viewerUrl;
+    document.getElementById('live-viewer-url-alt').textContent = 'Watch on your YouTube channel (usually live within ~15s)';
     document.getElementById('live-info').style.display = '';
     document.getElementById('live-dot').style.background = '#ff4444';
 
@@ -1548,27 +1554,37 @@ async function startLiveStream() {
     liveSeconds = 0;
     liveMediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: bitsPerSecond, audioBitsPerSecond: 128000 });
 
-    liveMediaRecorder.ondataavailable = async (e) => {
-      if (e.data.size === 0) return;
-      const data = e.data;
-      const push = async (retries) => {
-        try {
-          const r = await fetch(`/api/live/push/${liveSessionId}?key=${liveStreamKey}`, {
-            method: 'POST', body: data, headers: { 'Content-Type': 'application/octet-stream' }
-          });
-          if (!r.ok) throw new Error('push failed');
-          liveChunksSent++;
-          document.getElementById('live-chunks').textContent = liveChunksSent + ' chunks';
-          document.getElementById('live-chunks').style.color = '';
-        } catch (err) {
-          if (retries > 0) {
-            await new Promise(r => setTimeout(r, 500));
-            return push(retries - 1);
-          }
-          document.getElementById('live-chunks').style.color = '#ff4444';
+    // ffmpeg on the server needs webm chunks in exact recording order, one at a time.
+    // Firing every ondataavailable as its own concurrent fetch (the old behavior) let
+    // requests race and arrive out of order, which corrupts the stream ffmpeg pushes to
+    // YouTube. This queue sends one chunk, waits for the response, then sends the next.
+    let liveNextChunkIndex = 0;
+    let liveSendQueue = Promise.resolve();
+
+    const pushChunk = async (index, data, retries) => {
+      try {
+        const r = await fetch(`/api/live/push/${liveSessionId}?key=${liveStreamKey}&index=${index}`, {
+          method: 'POST', body: data, headers: { 'Content-Type': 'application/octet-stream' }
+        });
+        if (!r.ok) throw new Error('push failed');
+        const body = await r.json().catch(() => ({}));
+        liveChunksSent++;
+        document.getElementById('live-chunks').textContent = liveChunksSent + ' chunks';
+        document.getElementById('live-chunks').style.color = body.ffmpegAlive === false ? '#ff4444' : '';
+      } catch (err) {
+        if (retries > 0) {
+          await new Promise(r => setTimeout(r, 500));
+          return pushChunk(index, data, retries - 1);
         }
-      };
-      push(3);
+        document.getElementById('live-chunks').style.color = '#ff4444';
+      }
+    };
+
+    liveMediaRecorder.ondataavailable = (e) => {
+      if (e.data.size === 0) return;
+      const index = liveNextChunkIndex++;
+      const data = e.data;
+      liveSendQueue = liveSendQueue.then(() => pushChunk(index, data, 3));
     };
 
     liveMediaRecorder.start(2000);

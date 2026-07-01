@@ -8,6 +8,8 @@ const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const initSqlJs = require('sql.js');
+const { spawn } = require('child_process');
+const ffmpegPath = require('ffmpeg-static');
 
 const app = express();
 const PORT = process.env.PORT || 3456;
@@ -67,6 +69,7 @@ async function initDb() {
     ended_at TEXT
   )`);
   try { db.run("ALTER TABLE live_sessions ADD COLUMN stream_key TEXT"); } catch {}
+  try { db.run("ALTER TABLE live_sessions ADD COLUMN youtube_stream_key TEXT"); } catch {}
 
   const defaultAdmin = process.env.ADMIN_EMAIL || 'admin@cuestudio.dev';
   const defaultPass = process.env.ADMIN_PASSWORD || 'admin123';
@@ -208,16 +211,61 @@ app.get('/api/stats', auth, (req, res) => {
 app.get('/api/health', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
 // ── Live session routes ──
+// Real distribution and scale-to-many-viewers happens on YouTube's CDN, not on this server.
+// This server's only job is: receive MediaRecorder chunks from the broadcaster in order,
+// and relay them into an ffmpeg process that pushes RTMP to YouTube's ingest endpoint.
+// YouTube also auto-archives the stream as a normal VOD when it ends (if the broadcaster
+// has "Make stream available after ending" on in YouTube Studio), so there is no separate
+// upload step needed for the live path.
+function startFfmpegRelay(stream, youtubeStreamKey) {
+  const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${youtubeStreamKey}`;
+  const args = [
+    '-re',
+    '-i', 'pipe:0',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+    '-b:v', '2500k', '-maxrate', '2500k', '-bufsize', '5000k',
+    '-pix_fmt', 'yuv420p', '-g', '60',
+    '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+    '-f', 'flv', rtmpUrl,
+  ];
+  const proc = spawn(ffmpegPath, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+  proc.stderr.on('data', d => console.log(`[ffmpeg ${stream.id}]`, d.toString().slice(0, 300)));
+  proc.on('exit', (code) => {
+    console.log(`[ffmpeg ${stream.id}] exited with code ${code}`);
+    stream.ffmpegAlive = false;
+  });
+  proc.stdin.on('error', () => {}); // swallow EPIPE if stream stops abruptly
+  stream.ffmpeg = proc;
+  stream.ffmpegAlive = true;
+}
+
 app.post('/api/live/start', auth, (req, res) => {
   const { lesson_id, mimeType } = req.body;
+  // Prefer a key typed into the UI (lets a different channel be used per session);
+  // fall back to the Railway environment variable for the default channel.
+  const youtubeStreamKey = req.body.youtubeStreamKey || process.env.YT_STREAM_KEY;
+  if (!youtubeStreamKey) return res.status(400).json({ error: 'missing_youtube_stream_key' });
   const id = uuidv4();
   const roomName = 'live-' + id.slice(0, 8);
   const streamKey = uuidv4();
-  run(`INSERT INTO live_sessions (id, user_id, lesson_id, room_name, stream_key, status, started_at) VALUES (?, ?, ?, ?, ?, 'live', datetime('now'))`,
-    [id, req.user.id, lesson_id || 'general', roomName, streamKey]);
-  liveStreams[id] = { session: null, chunks: [], sseClients: [], streamClients: [], startTime: Date.now(), active: true, chunkIndex: 0, mimeType: mimeType || 'video/webm;codecs=vp8,opus' };
+  run(`INSERT INTO live_sessions (id, user_id, lesson_id, room_name, stream_key, youtube_stream_key, status, started_at) VALUES (?, ?, ?, ?, ?, ?, 'live', datetime('now'))`,
+    [id, req.user.id, lesson_id || 'general', roomName, streamKey, youtubeStreamKey]);
+  const stream = {
+    id, session: null, chunks: [], sseClients: [], streamClients: [],
+    startTime: Date.now(), active: true, chunkIndex: 0,
+    mimeType: mimeType || 'video/webm;codecs=vp8,opus',
+    nextExpectedIndex: 0, pendingChunks: new Map(), // out-of-order buffer, keyed by index
+  };
+  liveStreams[id] = stream;
+  startFfmpegRelay(stream, youtubeStreamKey);
   res.json({ id, roomName, streamKey, viewerUrl: `/live/${roomName}`, createdAt: new Date().toISOString() });
 });
+
+function stopFfmpegRelay(stream) {
+  if (!stream.ffmpeg) return;
+  try { stream.ffmpeg.stdin.end(); } catch {}
+  setTimeout(() => { try { stream.ffmpeg.kill('SIGKILL'); } catch {} }, 3000);
+}
 
 app.post('/api/live/stop', auth, (req, res) => {
   const { id } = req.body;
@@ -228,6 +276,7 @@ app.post('/api/live/stop', auth, (req, res) => {
   const stream = liveStreams[id];
   if (stream) {
     stream.active = false;
+    stopFfmpegRelay(stream);
     stream.sseClients.forEach(c => { try { c.end(); } catch {} });
     stream.streamClients.forEach(c => { try { c.end(); } catch {} });
     delete liveStreams[id];
@@ -243,28 +292,46 @@ app.get('/api/live/active', auth, (req, res) => {
   })));
 });
 
+// Chunks must reach ffmpeg's stdin in the exact order they were recorded, or the webm
+// stream is invalid and ffmpeg drops the connection to YouTube. The client sends an
+// explicit index per chunk (see index.html), so out-of-order arrivals (retries, network
+// races) get buffered here and flushed once the gap is filled.
+function feedFfmpegInOrder(stream, index, data) {
+  stream.pendingChunks.set(index, data);
+  while (stream.pendingChunks.has(stream.nextExpectedIndex)) {
+    const chunk = stream.pendingChunks.get(stream.nextExpectedIndex);
+    stream.pendingChunks.delete(stream.nextExpectedIndex);
+    if (stream.ffmpeg && stream.ffmpegAlive) {
+      try { stream.ffmpeg.stdin.write(chunk); } catch {}
+    }
+    stream.nextExpectedIndex++;
+  }
+  // Safety valve: if a chunk never arrives (dropped request), don't stall forever.
+  if (stream.pendingChunks.size > 20) {
+    const lowest = Math.min(...stream.pendingChunks.keys());
+    stream.nextExpectedIndex = lowest;
+  }
+}
+
 app.post('/api/live/push/:id', express.raw({ type: '*/*', limit: '50mb' }), (req, res) => {
   const stream = liveStreams[req.params.id];
   if (!stream || !stream.active) return res.status(404).json({ error: 'stream_not_found' });
   const key = req.query.key || req.headers['x-stream-key'];
   const sessions = query(`SELECT * FROM live_sessions WHERE id = ?`, [req.params.id]);
   if (!sessions.length || sessions[0].stream_key !== key) return res.status(403).json({ error: 'invalid_key' });
+  const clientIndex = req.query.index !== undefined ? parseInt(req.query.index) : stream.chunkIndex;
   const index = stream.chunkIndex++;
   const data = req.body; // raw buffer
   stream.chunks.push({ index, data });
-  // Keep last 150 chunks (~5 min at 2s intervals)
+  // Keep last 150 chunks (~5 min at 2s intervals) — used only for the optional in-app preview below
   if (stream.chunks.length > 200) stream.chunks = stream.chunks.slice(-150);
-  // Notify SSE clients
+  feedFfmpegInOrder(stream, clientIndex, data);
+  // Notify SSE clients (optional in-app broadcaster preview, not the viewer path anymore)
   stream.sseClients.forEach(c => {
     try { c.write(`data: ${JSON.stringify({ index, size: data.length })}\n\n`); } catch {}
   });
   stream.sseClients = stream.sseClients.filter(c => { try { return !c.destroyed; } catch { return false; } });
-  // Write to persistent stream-webm clients
-  stream.streamClients.forEach(c => {
-    try { c.write(data); } catch {}
-  });
-  stream.streamClients = stream.streamClients.filter(c => { try { return !c.destroyed; } catch { return false; } });
-  res.json({ index });
+  res.json({ index, ffmpegAlive: !!stream.ffmpegAlive });
 });
 
 app.get('/api/live/poll/:id', (req, res) => {

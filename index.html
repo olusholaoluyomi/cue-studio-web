@@ -472,6 +472,7 @@ a{color:var(--accent-2);text-decoration:none}
         <span style="font-size:11px;color:var(--muted)" id="live-resolution"></span>
         <span style="font-size:11px;color:var(--muted)" id="live-mic" title="Microphone"></span>
         <span style="font-size:11px;color:var(--muted)" id="live-chunks">0 chunks</span>
+        <span style="font-size:11px;color:var(--muted)" id="live-yt-status"></span>
       </div>
     </div>
 
@@ -1501,6 +1502,7 @@ let liveAnimationId = null;
 let liveChunksSent = 0;
 let liveSeconds = 0;
 let liveTimerInterval = null;
+let liveYtPollInterval = null;
 let liveRecordRecorder = null;
 let liveRecordChunks = [];
 
@@ -1589,6 +1591,26 @@ async function startLiveStream() {
 
     liveMediaRecorder.start(2000);
 
+    // Poll YouTube relay status every 5s
+    liveYtPollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/live/ffmpeg-status/${liveSessionId}`);
+        if (!r.ok) throw new Error('fetch failed');
+        const data = await r.json();
+        const el = document.getElementById('live-yt-status');
+        if (data.ffmpegAlive && data.ffmpegPath) {
+          el.textContent = '📡 YT';
+          el.style.color = '#44ff44';
+        } else if (!data.ffmpegPath) {
+          el.textContent = '⚠ no ffmpeg';
+          el.style.color = '#ffaa00';
+        } else {
+          el.textContent = '⚠ YT offline';
+          el.style.color = '#ff4444';
+        }
+      } catch {}
+    }, 5000);
+
     document.getElementById('live-status-text').textContent = 'LIVE';
     document.getElementById('live-go-btn').textContent = '⏹ Stop';
     document.getElementById('live-go-btn').style.background = '#ff4444';
@@ -1614,6 +1636,8 @@ async function stopLiveStream() {
   if (liveRecordRecorder && liveRecordRecorder.state !== 'inactive') { liveRecordRecorder.stop(); liveRecordRecorder = null; liveRecordChunks = []; }
   stopLiveComposite();
   clearInterval(liveTimerInterval);
+  clearInterval(liveYtPollInterval);
+  document.getElementById('live-yt-status').textContent = '';
   document.getElementById('live-dot').style.background = 'var(--accent)';
   document.getElementById('live-status-text').textContent = 'Stream ended';
   document.getElementById('live-go-btn').textContent = '🔴 Go Live';

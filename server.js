@@ -220,7 +220,8 @@ app.get('/api/health', (req, res) => res.json({ ok: true, uptime: process.uptime
 function startFfmpegRelay(stream, youtubeStreamKey) {
   const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${youtubeStreamKey}`;
   const args = [
-    '-re',
+    '-fflags', 'nobuffer',
+    '-f', 'webm',
     '-i', 'pipe:0',
     '-vf', 'scale=1920:-2',
     '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
@@ -229,13 +230,18 @@ function startFfmpegRelay(stream, youtubeStreamKey) {
     '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
     '-f', 'flv', rtmpUrl,
   ];
+  if (!ffmpegPath) { console.error(`[ffmpeg ${stream.id}] ffmpeg-static returned null`); stream.ffmpegAlive = false; return; }
+  console.log(`[ffmpeg ${stream.id}] starting, path=${ffmpegPath}`);
   const proc = spawn(ffmpegPath, args, { stdio: ['pipe', 'ignore', 'pipe'] });
-  proc.stderr.on('data', d => console.log(`[ffmpeg ${stream.id}]`, d.toString().slice(0, 300)));
+  proc.on('error', (e) => { console.error(`[ffmpeg ${stream.id}] spawn error:`, e.message); stream.ffmpegAlive = false; });
+  let stderrBuf = '';
+  proc.stderr.on('data', d => { stderrBuf += d.toString(); if (stderrBuf.length > 10000) stderrBuf = stderrBuf.slice(-8000); });
   proc.on('exit', (code, signal) => {
-    console.log(`[ffmpeg ${stream.id}] exited with code ${code}, signal ${signal}`);
+    console.log(`[ffmpeg ${stream.id}] exit code=${code} signal=${signal}`);
+    if (code !== 0) console.error(`[ffmpeg ${stream.id}] stderr:`, stderrBuf.slice(-2000));
     stream.ffmpegAlive = false;
   });
-  proc.stdin.on('error', () => {}); // swallow EPIPE if stream stops abruptly
+  proc.stdin.on('error', (e) => { if (e.code !== 'EPIPE') console.error(`[ffmpeg ${stream.id}] stdin:`, e.message); });
   stream.ffmpeg = proc;
   stream.ffmpegAlive = true;
 }
@@ -333,6 +339,12 @@ app.post('/api/live/push/:id', express.raw({ type: '*/*', limit: '50mb' }), (req
   });
   stream.sseClients = stream.sseClients.filter(c => { try { return !c.destroyed; } catch { return false; } });
   res.json({ index, ffmpegAlive: !!stream.ffmpegAlive });
+});
+
+app.get('/api/live/ffmpeg-status/:id', (req, res) => {
+  const stream = liveStreams[req.params.id];
+  if (!stream) return res.status(404).json({ error: 'stream_not_found' });
+  res.json({ ffmpegAlive: !!stream.ffmpegAlive, ffmpegPath: !!ffmpegPath, chunks: stream.chunks.length });
 });
 
 app.get('/api/live/poll/:id', (req, res) => {

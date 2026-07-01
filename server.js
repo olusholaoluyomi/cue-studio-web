@@ -222,16 +222,17 @@ function startFfmpegRelay(stream, youtubeStreamKey) {
   const args = [
     '-re',
     '-i', 'pipe:0',
+    '-vf', 'scale=1920:-2',
     '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
-    '-b:v', '2500k', '-maxrate', '2500k', '-bufsize', '5000k',
+    '-b:v', '4500k', '-maxrate', '4500k', '-bufsize', '9000k',
     '-pix_fmt', 'yuv420p', '-g', '60',
     '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
     '-f', 'flv', rtmpUrl,
   ];
   const proc = spawn(ffmpegPath, args, { stdio: ['pipe', 'ignore', 'pipe'] });
   proc.stderr.on('data', d => console.log(`[ffmpeg ${stream.id}]`, d.toString().slice(0, 300)));
-  proc.on('exit', (code) => {
-    console.log(`[ffmpeg ${stream.id}] exited with code ${code}`);
+  proc.on('exit', (code, signal) => {
+    console.log(`[ffmpeg ${stream.id}] exited with code ${code}, signal ${signal}`);
     stream.ffmpegAlive = false;
   });
   proc.stdin.on('error', () => {}); // swallow EPIPE if stream stops abruptly
